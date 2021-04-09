@@ -24,7 +24,8 @@ use std::rc::Rc;
 use std::collections::{HashMap, HashSet};
 
 pub type Letter = char;
-pub type WordDict = WordListNode;
+pub type FuzzyDict<T> = WordListNode<T>;
+pub type WordDict = FuzzyDict<String>;
 
 /// Search algorithm choice
 pub enum SearchKind {
@@ -32,17 +33,17 @@ pub enum SearchKind {
     Strict,
     /// Search for a prefix match with specified depth
     Prefix(usize),
-    /// Search for a fuzzy prefix match with specified depth and fuzz
-    Fuzzy(usize, usize)
+    /// Search for a fuzzy prefix match with specified fuzz
+    Fuzzy(usize)
 }
 
-pub struct WordListNode {
+pub struct WordListNode<Term> where Term: std::cmp::Eq + std::hash::Hash {
     // Contains pointers to terms
-    terms: HashSet<Rc<String>>,
+    terms: HashSet<Rc<Term>>,
     children: HashMap<Letter, Self>
 }
 
-impl WordListNode {
+impl<T: std::cmp::Eq + std::hash::Hash> WordListNode<T> {
     /// Creates an empty wordlist node
     pub fn new() -> Self {
         Self {
@@ -68,24 +69,35 @@ impl WordListNode {
     }
 
     /// Learns a single term, which may consist of multiple words, separated by whitespace
-    pub fn learn_term(&mut self, term: Rc<String>) {
-        for word in term.split_whitespace() {
+    pub fn learn_term(&mut self, term_repr: Rc<String>, term: Rc<T>) {
+        for word in term_repr.split(|chr: char| !chr.is_alphanumeric()) {
             // Create a branch for the current word
             self.learn_word(word)
             // And add the term to it's end node
                 .terms.insert(term.clone());
         }
 
-        let no_spaces = term.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        let no_spaces = term_repr.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
         self.learn_word(&no_spaces).terms.insert(term);
     }
 
     /// Collect all the terms from this node and down to the specified node depth (Recursive)
-    fn collect_terms(&self, depth: usize) -> Vec<Rc<String>> {
-        let mut terms: Vec<Rc<String>> = self.terms.iter().map(|r| r.clone()).collect();
-        if depth > 0 {
+    fn collect_terms(&self, depth: Option<usize>) -> Vec<Rc<T>> {
+        let mut terms: Vec<Rc<T>> = self.terms.iter().map(|r| r.clone()).collect();
+        
+        // If depth is provided, only go as far as that depth
+        if let Some(depth) = depth {
+            if depth > 0 {
+                for (_, child) in self.children.iter() {
+                    terms.append(&mut child.collect_terms(Some(depth - 1)));
+                }
+            }
+        }
+        // Otherwise go as deep as first matches only
+        else {
+            // try to find from the nodes below
             for (_, child) in self.children.iter() {
-                terms.append(&mut child.collect_terms(depth - 1));
+                terms.append(&mut child.collect_terms(None));
             }
         }
         terms
@@ -109,10 +121,11 @@ impl WordListNode {
     }
 
     /// Perform a strict query prefix search with specified depth fuzz
-    pub fn find_terms(&self, query: &str, kind: SearchKind) -> Option<Vec<Rc<String>>> {
+    pub fn find_terms(&self, query: &str, kind: SearchKind) -> Vec<Rc<T>> {
         let mut now_node = self;
         let max_i = query.len() - 1;
         let lower_query = query.to_lowercase();
+        let mut restrict_to: HashSet<Rc<T>> = HashSet::new();
 
         for (i, c) in  lower_query.chars().enumerate() {
             assert!(!c.is_whitespace());
@@ -121,26 +134,37 @@ impl WordListNode {
                     if i != max_i {
                         // If we ended up here, then it's a mismatched letter mid-word.
                         match kind {
-                            SearchKind::Fuzzy(depth, fuzz) => {
+                            SearchKind::Fuzzy(fuzz) => {
                                 match now_node.hope_for_success(&c, fuzz) {
                                     Some(alt_node) => {
+                                        // to avoid false positives, restrict to those which would have appeared if we continued to match, but only once
+                                        if restrict_to.len() == 0 {
+                                            let could_have_been = now_node.collect_terms(None);
+                                            restrict_to.extend(could_have_been.into_iter());
+                                        }
+
                                         // found an alternate node matching current char, continue from there
                                         now_node = alt_node;
                                     }, 
                                     None => {
                                         // found no alternate node further, last hope is try from the root
 
-                                        // TODO: SCRAP THE FOLLOWING? Seems to improve false positives
-                                        // match self.hope_for_success(&c, 1) {
-                                        //     Some(alt_word) => {
-                                        //         now_node = alt_word;
-                                        //     }, // found alternate node in another word, continue from there
-                                        //     None => return None // found no alternative, give up
-                                        // }
+                                        match self.hope_for_success(&c, 1) {
+                                            Some(alt_word) => {
+                                                // to avoid false positives, restrict to those which would have appeared if we continued to match, but only once
+                                                if restrict_to.len() == 0 {
+                                                    let could_have_been = now_node.collect_terms(None);
+                                                    restrict_to.extend(could_have_been.into_iter());
+                                                }
+
+                                                now_node = alt_word;
+                                            }, // found alternate node in another word, continue from there
+                                            None => return vec![] // found no alternative, give up
+                                        }
                                     }
                                 }
                             },
-                            _ => return None // not fuzzy search, give up
+                            _ => return vec![] // not fuzzy search, give up
                         }
                     }
                 },
@@ -149,69 +173,75 @@ impl WordListNode {
         }
         
         let depth_limit = match kind {
-            SearchKind::Fuzzy(depth, _) => depth,
-            SearchKind::Prefix(depth) => depth,
-            SearchKind::Strict => 1
+            SearchKind::Fuzzy(_) => None,
+            SearchKind::Prefix(depth) => Some(depth),
+            SearchKind::Strict => Some(0)
         };
 
-        let rslt: Vec<Rc<String>> = now_node.collect_terms(depth_limit).into_iter().unique().collect();
-        if rslt.len() == 0 {
-            None
-        } else {
-            Some(rslt)
-        }
+        let rslt: Vec<Rc<T>> = now_node.collect_terms(depth_limit).into_iter()
+                        .unique()
+                        .filter(|x| if restrict_to.len() > 0 { restrict_to.contains(x) } else { true } )
+                        .collect();
+        rslt
     }
-} 
+}
+
+impl WordDict {
+    pub fn learn(&mut self, term: String) {
+        let rc = Rc::new(term);
+        self.learn_term(rc.clone(), rc);
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::{WordDict, SearchKind};
-    use std::rc::Rc;
 
     #[test]
     fn it_saves_strings_strict() {
         let mut dict = WordDict::new();
 
-        dict.learn_term(Rc::new(String::from("hello")));
+        dict.learn(String::from("hello"));
         
         // Expect to find "hello"
-        assert!( dict.find_terms("hello", SearchKind::Strict).is_some() );
+        assert!( dict.find_terms("hello", SearchKind::Strict).len() > 0 );
         // Expect to find only "hello"
-        assert!( dict.find_terms("hello", SearchKind::Strict).unwrap().len() == 1 );
+        assert!( dict.find_terms("hello", SearchKind::Strict).len() == 1 );
         // Expect to find "hello" by prefix
-        assert!( dict.find_terms("hell", SearchKind::Prefix(10)).is_some() );
+        assert!( dict.find_terms("hell", SearchKind::Prefix(10)).len() > 0 );
         // Expect to not find "hell" as a word
-        assert!( dict.find_terms("hell", SearchKind::Strict).is_none() );
+        assert!( dict.find_terms("hell", SearchKind::Strict).len() == 0 );
 
-        dict.learn_term(Rc::new(String::from("hell")));
+        dict.learn(String::from("hell"));
         // Expect to find "hell" as a word and not hello
-        assert!( dict.find_terms("hell", SearchKind::Strict).is_some() );
-        assert!( dict.find_terms("hell", SearchKind::Strict).unwrap().len() == 1 );
+        assert!( dict.find_terms("hell", SearchKind::Strict).len() > 0 );
+        assert!( dict.find_terms("hell", SearchKind::Strict).len() == 1 );
         // Expect to find "hell" and "hello" by prefix
-        assert!( dict.find_terms("hell", SearchKind::Prefix(10)).unwrap().len() == 2 );
-        assert!( dict.find_terms("he", SearchKind::Prefix(10)).unwrap().len() == 2 );
+        assert!( dict.find_terms("hell", SearchKind::Prefix(10)).len() == 2 );
+        assert!( dict.find_terms("he", SearchKind::Prefix(10)).len() == 2 );
 
         // But if depth is too shallow, find nothing
-        assert!( dict.find_terms("he", SearchKind::Prefix(1)).is_none() );
+        assert!( dict.find_terms("he", SearchKind::Prefix(1)).len() == 0 );
 
         // Expect to not find what we didn't save
-        assert!( dict.find_terms("hejkjk", SearchKind::Prefix(10)).is_none() );
-        assert!( dict.find_terms("obama", SearchKind::Prefix(10)).is_none() );
-        assert!( dict.find_terms("ajdklajhf", SearchKind::Prefix(10)).is_none() );
+        assert!( dict.find_terms("hejkjk", SearchKind::Prefix(10)).len() == 0 );
+        assert!( dict.find_terms("obama", SearchKind::Prefix(10)).len() == 0 );
+        assert!( dict.find_terms("ajdklajhf", SearchKind::Prefix(10)).len() == 0 );
     }
 
     #[test]
     fn it_searches_by_words() {
         let mut dict = WordDict::new();
 
-        dict.learn_term(Rc::new(String::from("Hello World")));
-        dict.learn_term(Rc::new(String::from("World Is Mine")));
-        dict.learn_term(Rc::new(String::from("miku miku ni shite ageru")));
+        dict.learn(String::from("Hello World"));
+        dict.learn(String::from("World Is Mine"));
+        dict.learn(String::from("miku miku ni shite ageru"));
 
         fn check_finds(dict: &WordDict, query: &str, kind: SearchKind) {
             let rslt = dict.find_terms(query, kind);
             println!("{}: {:#?}", query, rslt);
-            assert!( rslt.is_some() );
+            assert!( rslt.len() > 0 );
         }
 
         check_finds(&dict, "world", SearchKind::Strict);
@@ -223,21 +253,21 @@ mod tests {
     fn it_searches_fuzzy() {
         let mut dict = WordDict::new();
 
-        dict.learn_term(Rc::new(String::from("Hello World")));
-        dict.learn_term(Rc::new(String::from("World Is Mine")));
-        dict.learn_term(Rc::new(String::from("miku miku ni shite ageru")));
+        dict.learn(String::from("Hello World"));
+        dict.learn(String::from("World Is Mine"));
+        dict.learn(String::from("miku miku ni shite ageru"));
 
         fn check_finds(dict: &WordDict, query: &str, kind: SearchKind, expect: &str) {
             use std::borrow::Borrow;
 
             let rslt = dict.find_terms(query, kind);
             println!("{}: {:#?}", query, rslt);
-            assert!( rslt.is_some() );
-            assert!( rslt.unwrap().iter().map(|r| r.borrow() ).any(|v: &String| v.eq(expect)) );
+            assert!( rslt.len() > 0 );
+            assert!( rslt.iter().map(|r| r.borrow() ).any(|v: &String| v.eq(expect)) );
         }
 
-        check_finds(&dict, "helwor", SearchKind::Fuzzy(10, 10), "Hello World");
-        check_finds(&dict, "miminishiage", SearchKind::Fuzzy(10, 10), "miku miku ni shite ageru");
-        check_finds(&dict, "woismi", SearchKind::Fuzzy(10, 10), "World Is Mine");
+        check_finds(&dict, "helwor", SearchKind::Fuzzy(10), "Hello World");
+        check_finds(&dict, "miminishiage", SearchKind::Fuzzy(10), "miku miku ni shite ageru");
+        check_finds(&dict, "woismi", SearchKind::Fuzzy(10), "World Is Mine");
     }
 }

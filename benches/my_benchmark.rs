@@ -1,6 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion, black_box};
 use quiksearch::{WordDict, SearchKind};
-use std::rc::Rc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut g = c.benchmark_group("benches");
@@ -19,14 +18,14 @@ fn criterion_benchmark(c: &mut Criterion) {
 
             for line in words_list {
                 if let Ok(line) = line {
-                    dict.learn_term(Rc::new(line));
+                    dict.learn(line);
                 }
             }
         });
     });
 
     g.warm_up_time(std::time::Duration::from_secs(3));
-    g.sample_size(100);
+    g.sample_size(1000);
 
     g.bench_function("exact matching", |b| {
         use std::fs::File;
@@ -40,19 +39,18 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         for line in words_list {
             if let Ok(line) = line {
-                let term = Rc::new(line);
-                dict.learn_term(term.clone());
-                terms.push(term);
+                dict.learn(line.clone());
+                terms.push(line);
             }
         }
         
         b.iter(|| {
-            let term = terms.choose(&mut rand::thread_rng()).unwrap();
-            let _ = black_box(dict.find_terms(term, SearchKind::Strict));
+            let term: String = terms.choose(&mut rand::thread_rng()).unwrap().chars().filter(|x| x.is_alphanumeric()).collect();
+            let _ = black_box(dict.find_terms(&term, SearchKind::Strict));
         });
     });
 
-    g.bench_function("prefix matching", |b| {
+    g.bench_function("prefix matching gibberish", |b| {
         use std::fs::File;
         use std::io::{self, BufRead};
         use rand::{distributions::Alphanumeric, Rng};
@@ -62,8 +60,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut dict = WordDict::new();
         for line in words_list {
             if let Ok(line) = line {
-                let term = Rc::new(line);
-                dict.learn_term(term.clone());
+                dict.learn(line);
             }
         }
         
@@ -77,7 +74,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     });
 
-    g.bench_function("fuzzy matching", |b| {
+    g.bench_function("fuzzy matching gibberish", |b| {
         use std::fs::File;
         use std::io::{self, BufRead};
         use rand::{distributions::Alphanumeric, Rng};
@@ -87,8 +84,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut dict = WordDict::new();
         for line in words_list {
             if let Ok(line) = line {
-                let term = Rc::new(line);
-                dict.learn_term(term.clone());
+                dict.learn(line);
             }
         }
         
@@ -98,7 +94,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                     .take(3)
                                     .map(char::from)
                                     .collect();
-            let _ = black_box(dict.find_terms(&term, SearchKind::Fuzzy(3, 5)));
+            let _ = black_box(dict.find_terms(&term, SearchKind::Fuzzy(5)));
         });
     });
 }
