@@ -35,9 +35,6 @@ fn main() {
         stdout().flush().unwrap();
         io::stdin().read_line(&mut input).expect("error: unable to read user input");
        
-        // filter input
-        input = input.chars().filter(|c| c.is_alphanumeric()).collect();
-
         let start = Instant::now();
         let rslt = dict.find_terms(&input.trim(), SearchKind::Fuzzy(FUZZ));
         println!("Search took {:?}", start.elapsed());

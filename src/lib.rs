@@ -124,11 +124,10 @@ impl<T: std::cmp::Eq + std::hash::Hash> WordListNode<T> {
     pub fn find_terms(&self, query: &str, kind: SearchKind) -> Vec<Rc<T>> {
         let mut now_node = self;
         let max_i = query.len() - 1;
-        let lower_query = query.to_lowercase();
+        let lower_query: String = query.to_lowercase().chars().filter(|x| x.is_alphanumeric()).collect();
         let mut restrict_to: HashSet<Rc<T>> = HashSet::new();
 
         for (i, c) in  lower_query.chars().enumerate() {
-            assert!(!c.is_whitespace());
             match now_node.children.get(&c) {
                 None => {
                     if i != max_i {
