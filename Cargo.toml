@@ -1,0 +1,17 @@
+[package]
+name = "quiksearch"
+version = "0.1.0"
+authors = ["nobody <nobody@nowhere>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dependencies]
+itertools = "0.10.0"
+
+[dev-dependencies]
+criterion = "0.3"
+rand = "0.8.3"
+
+[[bench]]
+name = "my_benchmark"
+harness = false
