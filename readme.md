@@ -35,26 +35,10 @@ Strict matching works by following the trie according to the query and returning
 
 Prefix matching does the same but also recursively collects the terms from all other nodes X levels below the final found node as well.
 
-Fuzzy matching works similar to prefix matching, however, when it reaches a mismatched node (when there is no match in current node's outputs with the current character) it tries to skip a FUZZ number of letters. Hence typing e.g. "phosh" will match against the term "Photoshop" when FUZZ ≥ 2 and DEPTH ≥ 1 (`[PHO]<- match, [to]<- fuzzy skip, [SHO]<- match, [p]<- depth`).
+Fuzzy matching works similar to prefix matching, however, when it reaches a mismatched node (when there is no match in current node's outputs with the current character) it tries to skip a FUZZ number of letters. Hence typing e.g. "phosh" will match against the term "Photoshop" when FUZZ ≥ 2 (`[PHO]<- match, [to]<- fuzzy skip, [SHO]<- match, [p]<- depth`).
 
 If the fuzzy algorithm still fails to match after skipping, it will try and do an unfuzzy match from the root starting at the current character. Hence typing e.g. "phobo" will match against the term "Photo Booth" (`[PHO]<- match [to]<- fuzzy skip [BO]<- restart new word from root [oth]<- depth`).
 
-### Other thoughts
-
-Currently a lot of false positives is cut off by adding a copy of the term with spaces removed into the trie. However this is not optimal. Probably it's better to keep track of the nodes somehow and when rematching a new word from the root, filter off those that don't have any relation to the already matched words. (Add nodes between words in addition to ones between letters, and do fuzzy matching over them rather than the root?)
-
-Otherwise issues like this arise (second item should not be returned, but it is, due to `[UMB]` triggering a root rematch and matching with "Umbrella"):
-
-```
-> hereumb
-You might have meant: [
-    "Here Comes Mr. Umbrella",
-    "WORLD\'S END UMBRELLA",
-]
-Search took 1.2266ms
-```
-
-P.S. Disabling root-rematching while keeping the spaceless copy thing, but not giving up on a fuzzy mismatch, seems to have improved the situation significantly with shorter items, however not with long ones (`hereumb` matches properly but `thocherblo` won't match "Thousand Cherry Blossoms" anymore).
 
 ## Example output
 
@@ -62,91 +46,94 @@ Example output as of the initial commit with FUZZ=5, DEPTH=30, which seems to wo
 
 ```
 Predictive Search
-Loading took 18.2265ms
-Enter query, Ctl-C to exit.
-
+Loading took 8.2578ms, loaded 299 terms: about 36208 terms per second
+Enter query without whitespace, Ctl-C to exit.
 > ghorul
+Search took 95µs
 You might have meant: [
     "Ghost Rule",
 ]
-Search took 637.5µs
-
-> systemlov
+> syslo
+Search took 174.7µs
 You might have meant: [
     "Systematic Love",
 ]
-Search took 871.5µs
-
-> lucdream
+> lucdrm
+Search took 538.9µs
 You might have meant: [
     "Lucid Dreaming",
 ]
-Search took 1.0359ms
-
 > senbon
+Search took 51.4µs
 You might have meant: [
     "Thousand Cherry Blossoms (Senbonzakura)",
 ]
-Search took 801.7µs
-
-> deepseaund
+> thchebl
+Search took 339.7µs
+You might have meant: [
+    "Let Me Lose Myself in the Black Note",
+    "Thousand Cherry Blossoms (Senbonzakura)",
+]
+> deepunder
+Search took 97.5µs
 You might have meant: [
     "Deep Sea City Underground",
 ]
-Search took 753.4µs
-
 > pimoo
+Search took 102.1µs
 You might have meant: [
     "Pink Moon",
 ]
-Search took 683.9µs
-
 > colorse
+Search took 161.9µs
 You might have meant: [
     "Colorful × Sexy",
 ]
-Search took 825.1µs
-
-> solend
+> colmel
+Search took 89.1µs
 You might have meant: [
-    "Solitude\'s End",
-    "Solitude\'s End -extend edition-",
+    "Colorful × Melody",
 ]
-Search took 1.2576ms
-
-> worlendan
+> solend
+Search took 80.5µs
+You might have meant: [
+    "Solitude\'s End -extend edition-",
+    "Solitude\'s End",
+]
+> woendan
+Search took 171.5µs
 You might have meant: [
     "World\'s End Dancehall -Live Dance Edition-",
 ]
-Search took 872.8µs
-
-> worlenum
+> woenum
+Search took 109µs
 You might have meant: [
     "WORLD\'S END UMBRELLA",
 ]
-Search took 544.5µs
-
-> hostr
-You might have meant: [
-    "Holy Star -DIVA mix-",
-]
-Search took 1.0205ms
-
 > onrock
+Search took 64.3µs
 You might have meant: [
     "on the rocks",
 ]
-Search took 953.4µs
-
 > tilim
+Search took 128.3µs
 You might have meant: [
     "Time Limit",
 ]
-Search took 582.1µs
-
-> bleybr
+> blybr
+Search took 169.5µs
 You might have meant: [
     "Bless Your Breath",
 ]
-Search took 808µs
+> miminishiage
+Search took 729µs
+You might have meant: [
+    "Miku Miku Ni Shite Ageru",
+]
+> miku ageru
+Search took 391.7µs
+You might have meant: [
+    "Miku Miku Ni Shite Ageru",
+]
+>
 ```
