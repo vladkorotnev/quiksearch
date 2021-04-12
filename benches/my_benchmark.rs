@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion, black_box};
-use quiksearch::{WordDict, SearchKind};
+use quiksearch::{WordDict, SearchKind, FuzzPriority};
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut g = c.benchmark_group("benches");
@@ -25,7 +25,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     g.warm_up_time(std::time::Duration::from_secs(3));
-    g.sample_size(1000);
+    g.sample_size(5000);
 
     g.bench_function("exact matching", |b| {
         use std::fs::File;
@@ -94,7 +94,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                     .take(3)
                                     .map(char::from)
                                     .collect();
-            let _ = black_box(dict.find_terms(&term, SearchKind::Fuzzy(5)));
+            let _ = black_box(dict.find_terms(&term, SearchKind::Fuzzy(5, FuzzPriority::TypoCorrection)));
         });
     });
 }

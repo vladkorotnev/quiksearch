@@ -27,6 +27,14 @@ pub type Letter = char;
 pub type FuzzyDict<T> = WordListNode<T>;
 pub type WordDict = FuzzyDict<String>;
 
+/// Priority for fuzzy algorithm
+pub enum FuzzPriority {
+    /// When an unexpected character is found, prefer to treat it as a word boundary
+    WordBoundary,
+    /// When an unexpected character is found, prefer to treat it as a typo. Falls back to WordBoundary if nothing is found, thus may be slower, but more precise.
+    TypoCorrection
+}
+
 /// Search algorithm choice
 pub enum SearchKind {
     /// Search for an exact match
@@ -34,7 +42,7 @@ pub enum SearchKind {
     /// Search for a prefix match with specified depth
     Prefix(usize),
     /// Search for a fuzzy prefix match with specified fuzz
-    Fuzzy(usize)
+    Fuzzy(usize, FuzzPriority)
 }
 
 pub struct WordListNode<Term> where Term: std::cmp::Eq + std::hash::Hash {
@@ -43,7 +51,7 @@ pub struct WordListNode<Term> where Term: std::cmp::Eq + std::hash::Hash {
     children: HashMap<Letter, Self>
 }
 
-impl<T: std::cmp::Eq + std::hash::Hash> WordListNode<T> {
+impl<T: std::cmp::Eq + std::hash::Hash + std::fmt::Debug> WordListNode<T> {
     /// Creates an empty wordlist node
     pub fn new() -> Self {
         Self {
@@ -122,6 +130,8 @@ impl<T: std::cmp::Eq + std::hash::Hash> WordListNode<T> {
 
     /// Perform a strict query prefix search with specified depth fuzz
     pub fn find_terms(&self, query: &str, kind: SearchKind) -> Vec<Rc<T>> {
+        use std::iter::FromIterator;
+
         let mut now_node = self;
         let max_i = query.len() - 1;
         let lower_query: String = query.to_lowercase().chars().filter(|x| x.is_alphanumeric()).collect();
@@ -133,32 +143,46 @@ impl<T: std::cmp::Eq + std::hash::Hash> WordListNode<T> {
                     if i != max_i {
                         // If we ended up here, then it's a mismatched letter mid-word.
                         match kind {
-                            SearchKind::Fuzzy(fuzz) => {
-                                match now_node.hope_for_success(&c, fuzz) {
-                                    Some(alt_node) => {
-                                        // to avoid false positives, restrict to those which would have appeared if we continued to match, but only once
-                                        if restrict_to.len() == 0 {
-                                            let could_have_been = now_node.collect_terms(None);
-                                            restrict_to.extend(could_have_been.into_iter());
-                                        }
+                            SearchKind::Fuzzy(fuzz, ref pri) => {
+                                // try to assume we reached a word boundary
 
-                                        // found an alternate node matching current char, continue from there
-                                        now_node = alt_node;
-                                    }, 
-                                    None => {
-                                        // found no alternate node further, last hope is try from the root
+                                // to avoid false positives, restrict to those which would have appeared if we continued to match, but only once
+                                if restrict_to.len() == 0 {
+                                    let could_have_been = now_node.collect_terms(None);
+                                    restrict_to.extend(could_have_been.into_iter());
+                                }
 
+                                match pri {
+                                    FuzzPriority::WordBoundary => {
+                                        // Try to find new word beginning with current char
                                         match self.hope_for_success(&c, 1) {
                                             Some(alt_word) => {
-                                                // to avoid false positives, restrict to those which would have appeared if we continued to match, but only once
-                                                if restrict_to.len() == 0 {
-                                                    let could_have_been = now_node.collect_terms(None);
-                                                    restrict_to.extend(could_have_been.into_iter());
+                                                let new_candidates = HashSet::from_iter(alt_word.collect_terms(None).into_iter());
+                                                if new_candidates.intersection(&restrict_to).count() > 0 {
+                                                    now_node = alt_word; // found alternate node in another word among current results, continue from there
+                                                    continue;
                                                 }
+                                                // else fall through to typo correction
+                                            }, 
+                                            None => () // fall through to typo correction
+                                        }
+                                    }
 
-                                                now_node = alt_word;
-                                            }, // found alternate node in another word, continue from there
-                                            None => return vec![] // found no alternative, give up
+                                    FuzzPriority::TypoCorrection => {
+                                        match now_node.hope_for_success(&c, fuzz) {
+                                            Some(alt_node) => {
+                                                // found an alternate node matching current char, continue from there
+                                                now_node = alt_node;
+                                            }, 
+                                            None => {
+                                                // found no alternate node further, last hope is try from the root
+                                                match self.hope_for_success(&c, 1) {
+                                                    Some(alt_word) => {
+                                                        now_node = alt_word;
+                                                    }, // found alternate node in another word, continue from there
+                                                    None => ()
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -172,15 +196,25 @@ impl<T: std::cmp::Eq + std::hash::Hash> WordListNode<T> {
         }
         
         let depth_limit = match kind {
-            SearchKind::Fuzzy(_) => None,
+            SearchKind::Fuzzy(_, _) => None,
             SearchKind::Prefix(depth) => Some(depth),
             SearchKind::Strict => Some(0)
         };
+        let res = now_node.collect_terms(depth_limit);
 
-        let rslt: Vec<Rc<T>> = now_node.collect_terms(depth_limit).into_iter()
+        let rslt: Vec<Rc<T>> = res.into_iter()
                         .unique()
                         .filter(|x| if restrict_to.len() > 0 { restrict_to.contains(x) } else { true } )
                         .collect();
+        if rslt.len() == 0 {
+            match kind {
+                SearchKind::Fuzzy(fuzz, pri) => match pri {
+                    FuzzPriority::TypoCorrection =>  return self.find_terms(query, SearchKind::Fuzzy(fuzz, FuzzPriority::WordBoundary)),
+                    _ => ()
+                }
+                _ => ()
+            }
+        }
         rslt
     }
 }
@@ -195,7 +229,7 @@ impl WordDict {
 
 #[cfg(test)]
 mod tests {
-    use super::{WordDict, SearchKind};
+    use super::{WordDict, SearchKind, FuzzPriority};
 
     #[test]
     fn it_saves_strings_strict() {
@@ -250,6 +284,8 @@ mod tests {
 
     #[test]
     fn it_searches_fuzzy() {
+        const FUZZ: usize = 5;
+
         let mut dict = WordDict::new();
 
         dict.learn(String::from("Hello World"));
@@ -265,8 +301,8 @@ mod tests {
             assert!( rslt.iter().map(|r| r.borrow() ).any(|v: &String| v.eq(expect)) );
         }
 
-        check_finds(&dict, "helwor", SearchKind::Fuzzy(10), "Hello World");
-        check_finds(&dict, "miminishiage", SearchKind::Fuzzy(10), "miku miku ni shite ageru");
-        check_finds(&dict, "woismi", SearchKind::Fuzzy(10), "World Is Mine");
+        check_finds(&dict, "helwor", SearchKind::Fuzzy(FUZZ, FuzzPriority::TypoCorrection), "Hello World");
+        check_finds(&dict, "miminishiage", SearchKind::Fuzzy(FUZZ, FuzzPriority::TypoCorrection), "miku miku ni shite ageru");
+        check_finds(&dict, "woismi", SearchKind::Fuzzy(FUZZ, FuzzPriority::TypoCorrection), "World Is Mine");
     }
 }

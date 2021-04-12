@@ -1,4 +1,4 @@
-use quiksearch::{WordDict, SearchKind};
+use quiksearch::{WordDict, SearchKind, FuzzPriority};
 use std::fs::File;
 use std::io::{self, BufRead, stdout, Write};
 use std::time::Instant;
@@ -26,7 +26,7 @@ fn main() {
     let mut input;
     println!("Enter query without whitespace, Ctl-C to exit.");
 
-    const FUZZ: usize = 7;
+    const FUZZ: usize = 3;
 
     loop {
         input = String::from("");
@@ -36,7 +36,7 @@ fn main() {
         io::stdin().read_line(&mut input).expect("error: unable to read user input");
        
         let start = Instant::now();
-        let rslt = dict.find_terms(&input.trim(), SearchKind::Fuzzy(FUZZ));
+        let rslt = dict.find_terms(&input.trim(), SearchKind::Fuzzy(FUZZ, FuzzPriority::TypoCorrection));
         println!("Search took {:?}", start.elapsed());
 
         if rslt.len() > 0  {
